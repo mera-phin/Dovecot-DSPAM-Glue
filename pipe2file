@@ -1,0 +1,107 @@
+#!/usr/bin/perl -w
+
+#imapsieve replacement for spool2dir
+
+#first get our modules
+
+use strict;
+use IO::File;
+use autodie;
+use warnings;
+
+#def vars
+
+#def arrays first
+
+my @filecontent=();
+my @optionvar=();
+
+
+#hashes
+
+my %classes=();
+
+
+#def/init scalars
+
+my $pathpart=q{};
+my $spoolpath=q{};
+my $time=q{};
+my $spamvar=q{};
+my $innocentvar=q{};
+my $optionvar=q{};
+my $classtype=q{};
+my $line=q{};
+my $classes=q{};
+
+#filehandle assigns
+
+my $PROC_OUT_FH=IO::File->new();
+
+
+#generate random number for file storage path
+
+#set up state
+
+#specifiy your option strings here -- without leading dashes --
+
+$spoolpath='/var/spool/dovecot/spool';
+$innocentvar='ham';
+$spamvar='spam';
+$pathpart=sprintf("0x%X", int(rand(9999999999)));
+$time=time;
+
+%classes =
+ (
+ $innocentvar => "innocent",
+ $spamvar => "spam",
+ );
+
+if ( '0' ne $#ARGV )
+
+    {
+      print "Only or at least one option needed. Stopping\n";
+      exit 1;
+    };
+
+chomp(@ARGV);
+@optionvar=split(/--/,$ARGV[($#ARGV)]);
+
+if ( ($innocentvar eq $optionvar[($#optionvar)]) || ($spamvar eq $optionvar[($#optionvar)]) )
+
+    {
+      $classtype=$classes{$optionvar[($#optionvar)]};
+    }
+
+else
+
+    {
+      print "Unknown option. Stopping\n";
+      exit 1;
+    };
+
+#capture stream input to STDIN from pipe
+
+@filecontent=<STDIN>;
+
+#set up filehandle and paths
+
+
+   if (! -e "$spoolpath/$classtype" )
+    {
+      print qq(no spool directory "$spoolpath/$classtype". Stopping\n);
+      exit 1;
+    };
+
+
+open $PROC_OUT_FH, q{+>>}, "$spoolpath/$classtype/$time-$pathpart";
+
+foreach my $line (@filecontent)
+
+         {
+           #replace crlf dos2unix conversion that was done in antispam
+           $line=~s/\r\n$/\n/simg;
+           print $PROC_OUT_FH $line;
+         };
+
+exit 0;
