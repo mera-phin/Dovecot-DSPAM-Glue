@@ -1,0 +1,364 @@
+#!/usr/bin/perl -w
+
+
+#first get our modules
+
+use strict;
+use IO::File;
+use File::Copy;
+use File::Path qw(make_path remove_tree);
+use autodie;
+use warnings;
+
+
+#def vars
+
+#def arrays first
+
+my @filecontent=();
+my @sighook=();
+my @typelist=();
+my @preprocesstrack=();
+my @filecleanerlist=();
+my @filelist=();
+my @dirs=();
+my @file_name_track=();
+my @userhook=();
+my @filechars=();
+my @path=();
+
+
+#def hashes
+
+my %counter=();
+my %spam_innocent_dirs=();
+my %spam_innocent_counter=();
+
+#initialise hash refs
+
+my $counter={};
+my $spam_innocent_counter={};
+my $spam_innocent_dirs={};
+
+#def/init scalars
+
+my $time=time;
+my $filecount='0';
+my $count_loop=q{};
+my $usertrack=q{};
+my $dir=q{};
+my $line=q{};
+my $dspam_sig_tracker=q{};
+my $dspam_res_tracker=q{};
+my $cleanfile=q{};
+my $file=q{};
+my $noscan=q{};
+my $dspam_tmp=q{};
+my $dspam_proclist=q{};
+my $dspam_flist=q{};
+my $debug_xs=q{};
+my $debug_loc=q{};
+my $bash_loc=q{};
+my $spam_dir=q{};
+my $ham_dir=q{};
+my $filetotal=q{};
+my $path=q{};
+my $filename=q{};
+my $logs=q{};
+
+
+#filehandle assigns
+
+my $DSPAM_FILE_LIST_fh=IO::File->new();
+my $DSPAM_FILE_CLEANER_LIST_fh=IO::File->new();
+my $CORE_EM_FILE_fh=IO::File->new();
+my $PROC_OUT_fh=IO::File->new();
+my $FLIST_OUT_fh=IO::File->new();
+
+
+#initialise hash lists
+
+$spam_innocent_counter{Einnocent}='0';
+$spam_innocent_counter{Espam}='0';
+$spam_innocent_counter{Cinnocent}='0';
+$spam_innocent_counter{Cspam}='0';
+$spam_innocent_counter{skipped}='0';
+$spam_innocent_counter{inval}='0';
+
+
+#Specifiy parameters
+
+$ham_dir='/var/spool/dovecot/spool/innocent';
+$spam_dir='/var/spool/dovecot/spool/spam';
+$dspam_tmp='/tmp/dspam';
+$dspam_proclist='proclist'; #Process commands handed to dspam
+$dspam_flist='flist'; #list of files pulled from the spool
+$debug_loc='dspam_debug';
+$bash_loc='#!/usr/bin/bash';
+$logs='logfiles';
+$debug_xs='0';
+
+#code
+
+#First wait a little in case the file was moved in error.
+
+sleep(90); #Wait 90 seconds to give user a chance to swap the mail back if moved in error.
+
+#reset the process tempfiles and make parent dir
+
+if (! -e "$dspam_tmp/$debug_loc/$time/$logs" )
+   {
+     make_path ( "$dspam_tmp/$debug_loc/$time/$logs", {chmod => 0750, } );
+   };
+
+if ( -e "$dspam_tmp/$dspam_proclist" )
+   {
+     unlink "$dspam_tmp/$dspam_proclist";
+   };
+
+if ( -e "$dspam_tmp/$dspam_flist" )
+   {
+     unlink "$dspam_tmp/$dspam_flist";
+   };
+
+#re-open the process script and file list for append-writes for later
+
+open $FLIST_OUT_fh, q{+>>}, "$dspam_tmp/$dspam_flist";
+chmod 0750, "$dspam_tmp/$dspam_flist";
+processmaildirs();
+
+#close flist filehandle
+close $FLIST_OUT_fh;
+
+sub processmaildirs
+{
+
+ %spam_innocent_dirs =
+ (
+ innocent => $ham_dir,
+ spam => $spam_dir,
+ );
+
+ @typelist = (keys %spam_innocent_dirs);
+
+
+foreach my $count_loop (0..$#typelist)
+
+
+ {
+
+      opendir $DSPAM_FILE_LIST_fh, "$spam_innocent_dirs{$typelist[$count_loop]}";
+      @filelist = grep {!/^\.\.?$/} readdir $DSPAM_FILE_LIST_fh;
+      closedir $DSPAM_FILE_LIST_fh;
+      foreach my $file (@filelist)
+       {
+         chomp $file;
+         print $FLIST_OUT_fh "$spam_innocent_dirs{$typelist[$count_loop]}/$file\n";
+         open $CORE_EM_FILE_fh, q{<}, "$spam_innocent_dirs{$typelist[$count_loop]}/$file";
+         @filecontent=<$CORE_EM_FILE_fh>;
+         close $CORE_EM_FILE_fh;
+
+         if (! @filecontent)
+          {
+            $spam_innocent_counter{inval}++;
+          }
+
+         else
+          {
+            $file_name_track[$filecount]="$spam_innocent_dirs{$typelist[$count_loop]}/$file";
+            $dspam_res_tracker='0';
+            $dspam_sig_tracker='0';
+            $usertrack='0';
+
+            MAILREAD:
+             {
+               foreach my $line (@filecontent)
+                {
+                  if ('1' ne $dspam_res_tracker)
+                   {
+                     if ($line=~m%^X\-DSPAM\-Result\:\s{1}(spam|innocent|whitelisted|virus)$%i)
+                      {
+                        $dspam_res_tracker='1';
+                        chomp $line;
+                        $line=~s/^X\-DSPAM\-Result\:\s{1}(spam|innocent|whitelisted|virus)$/$1/i;
+
+                        if ( 'virus' eq lc($line) || ( ('whitelisted' eq lc($line)) && ('spam' ne lc($typelist[$count_loop]))  ) || (lc($typelist[$count_loop]) eq lc($line)) )
+                         {
+                           $preprocesstrack[$filecount]='1';
+                         };
+                      }
+                     else
+                      {
+                        $preprocesstrack[$filecount]=$typelist[$count_loop];
+                      };
+                   };
+
+
+                  if ('1' ne $dspam_sig_tracker)
+                   {
+                     if ($line=~m%^X\-DSPAM\-Signature\:\s{1}\w{20,25}$%i)
+                      {
+                        $dspam_sig_tracker='1';
+                        chomp $line;
+                        $line=~s/^X\-DSPAM\-Signature\:\s{1}(\w{20,25})$/$1/i;
+                        $sighook[$filecount]=$line;
+                        $counter{$line}++;
+                      }
+
+                     else
+                      {
+                        $sighook[$filecount]='1';
+                        $counter{1}++;
+                      };
+                   };
+
+
+                  if ('1' ne $usertrack)
+                   {
+                     if ($line=~m%^Delivered\-To\:.+\@.+$%i)
+                      {
+                        $usertrack='1';
+                        chomp $line;
+                        $line=~s/^Delivered\-To\:\s{1}<?(.+\@.+)$/$1/i;
+                        $line=~s/^(.+\@.+)>$/$1/i;
+                        $userhook[$filecount]=$line;
+                      }
+
+                     else
+                      {
+                        $userhook[$filecount]='1';
+                      };
+                   };
+
+                  if ( ('1' eq $usertrack) && ('1' eq $dspam_sig_tracker) && ('1' eq $dspam_res_tracker) )
+                   {
+                     last MAILREAD;
+                   };
+
+                };
+             };
+            $filecount++;
+          };
+      };
+ };
+return 0;
+};
+
+
+#finished read-in of raw mails..phew
+#now to parse out the process data
+
+
+#re-open the process script and file list for append-writes for later
+
+open $PROC_OUT_fh, q{+>>}, "$dspam_tmp/$dspam_proclist";
+chmod 0750, "$dspam_tmp/$dspam_proclist";
+print $PROC_OUT_fh "$bash_loc\n";
+exportprocessscript();
+
+#close the process script filehandle
+print $PROC_OUT_fh "exit 0;\n";
+close $PROC_OUT_fh;
+
+
+sub exportprocessscript
+{
+
+
+foreach my $count_loop (0..$#sighook)
+
+ {
+    if ( ( ('1' ne $counter{$sighook[$count_loop]}) && ('1' ne $sighook[$count_loop]) ) || ('1' eq $preprocesstrack[$count_loop]) )
+     {
+       $spam_innocent_counter{skipped}++;
+     }
+
+    elsif ( ('innocent'||'spam' eq $preprocesstrack[$count_loop]) && ('1' ne $userhook[$count_loop]) && ('1' ne $sighook[$count_loop]) )
+     {
+       $spam_innocent_counter{'E'.$preprocesstrack[$count_loop]}++;
+
+       if ( '1' eq $debug_xs )
+        {
+          print $PROC_OUT_fh "/usr/bin/dspamc --client --debug --nofork --stdout --user $userhook[$count_loop] --signature=$sighook[$count_loop] --source=error --class=$preprocesstrack[$count_loop] --deliver=summary 1>$dspam_tmp/$debug_loc/$time/$logs/1-$userhook[$count_loop]-$sighook[$count_loop]-$preprocesstrack[$count_loop]-$time-$count_loop 2>$dspam_tmp/$debug_loc/$time/$logs/2-$userhook[$count_loop]-$sighook[$count_loop]-$preprocesstrack[$count_loop]-$time-$count_loop\n";
+        }
+
+       else
+        {
+          print $PROC_OUT_fh "/usr/bin/dspamc --client --user $userhook[$count_loop] --signature=$sighook[$count_loop] --source=error --class=$preprocesstrack[$count_loop] --deliver=summary 1>/dev/null 2>/dev/null\n";
+        };
+     }
+
+    elsif ( ('1' ne $userhook[$count_loop]) && ('1' eq $sighook[$count_loop]) && ('1' ne $preprocesstrack[$count_loop]) )
+     {
+       $spam_innocent_counter{'C'.$preprocesstrack[$count_loop]}++;
+
+       if ( '1' eq $debug_xs )
+        {
+          print $PROC_OUT_fh "/usr/bin/cat $file_name_track[$count_loop] | dspamc --client --debug --nofork --stdout --user $userhook[$count_loop] --source=corpus --class=$preprocesstrack[$count_loop] --deliver=summary 1>$dspam_tmp/$debug_loc/$time/$logs/1-$userhook[$count_loop]-$sighook[$count_loop]-$preprocesstrack[$count_loop]-$time-$count_loop 2>$dspam_tmp/$debug_loc/$time/$logs/2-$userhook[$count_loop]-$sighook[$count_loop]-$preprocesstrack[$count_loop]-$time-$count_loop\n";
+        }
+
+       else
+        {
+          print $PROC_OUT_fh "/usr/bin/cat $file_name_track[$count_loop] | dspamc --client --user $userhook[$count_loop] --source=corpus --class=$preprocesstrack[$count_loop] --deliver=summary 1>/dev/null 2>/dev/null\n";
+        };
+     };
+ };
+
+return 0;
+};
+
+
+#call the training list for processing
+
+system "$dspam_tmp/$dspam_proclist";
+
+#clean up after
+
+#code
+
+open $DSPAM_FILE_CLEANER_LIST_fh, q{<}, "$dspam_tmp/$dspam_flist";
+@filecleanerlist=<$DSPAM_FILE_CLEANER_LIST_fh>;
+close $DSPAM_FILE_CLEANER_LIST_fh;
+
+if ( (-e "$dspam_tmp/$dspam_proclist") && ('24' lt  -s "$dspam_tmp/$dspam_proclist")  && ('1' eq $debug_xs) )
+ {
+   if (! -e "$dspam_tmp/$debug_loc/$time" )
+    {
+      make_path ( "$dspam_tmp/$debug_loc/$time", { chmod => 0750, } );
+    };
+   move "$dspam_tmp/$dspam_proclist","$dspam_tmp/$debug_loc/$time/$dspam_proclist-$time";
+   move "$dspam_tmp/$dspam_flist","$dspam_tmp/$debug_loc/$time/$dspam_flist-$time";
+   chmod 0750, "$dspam_tmp/$debug_loc/$time/$dspam_proclist-$time";
+   chmod 0750, "$dspam_tmp/$debug_loc/$time/$dspam_flist-$time";
+   foreach my $cleanfile (@filecleanerlist)
+    {
+      chomp $cleanfile;
+      @path=split /\//, $cleanfile;
+      $filename=$path[($#path)];
+      move "$cleanfile","$dspam_tmp/$debug_loc/$time/$filename";
+      chmod 0750, "$dspam_tmp/$debug_loc/$time/$filename";
+    };
+ }
+
+else
+ {
+   remove_tree ( "$dspam_tmp/$debug_loc/$time", );
+   unlink "$dspam_tmp/$dspam_proclist";
+   unlink "$dspam_tmp/$dspam_flist";
+   foreach my $cleanfile (@filecleanerlist)
+    {
+      chomp $cleanfile;
+      unlink "$cleanfile";
+    };
+ };
+
+$filetotal = $filecount + $spam_innocent_counter{inval};
+
+$noscan = $filecount - ($spam_innocent_counter{Espam}+$spam_innocent_counter{Einnocent}+$spam_innocent_counter{Cspam}+$spam_innocent_counter{Cinnocent}+$spam_innocent_counter{skipped});
+
+if ('0' le $#filecleanerlist)
+{
+  print STDOUT "I>S: $spam_innocent_counter{Espam}. S>I: $spam_innocent_counter{Einnocent}. C>S: $spam_innocent_counter{Cspam}. C>I: $spam_innocent_counter{Cinnocent}. Sk: $spam_innocent_counter{skipped}. Ns: $noscan. In: $spam_innocent_counter{inval}. A: $filetotal\n";
+};
+
+exit 0;
